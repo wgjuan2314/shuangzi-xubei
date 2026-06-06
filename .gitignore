@@ -1,0 +1,6 @@
+# 任何含真实 token 的本地文件
+*.token
+*.secret
+secrets.json
+auth.local.*
+.env
