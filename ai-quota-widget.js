@@ -167,16 +167,16 @@ function colorFor(remain) {
   return new Color("#ff3b30");                  // 红
 }
 function resetText(resetAt, isWeekly) {
+  // 5小时显示「几点恢复」，周显示「哪天恢复」，最直接
   if (!resetAt || isNaN(resetAt)) return "";
-  let diff = resetAt - Date.now();
-  if (diff <= 0) return "即将重置";
+  if (resetAt - Date.now() <= 0) return "即将恢复";
+  let d = new Date(resetAt);
   if (isWeekly) {
-    let d = new Date(resetAt);
-    return `重置 ${d.getMonth() + 1}/${d.getDate()}`;
+    return `${d.getMonth() + 1}月${d.getDate()}日 恢复`;
   }
-  let h = Math.floor(diff / 3600000);
-  let m = Math.floor((diff % 3600000) / 60000);
-  return h > 0 ? `重置 ${h}h${m}m` : `重置 ${m}m`;
+  let hh = String(d.getHours()).padStart(2, "0");
+  let mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm} 恢复`;
 }
 function agoText(ts) {
   let m = Math.floor((Date.now() - ts) / 60000);
