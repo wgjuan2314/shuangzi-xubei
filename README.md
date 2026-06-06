@@ -1,6 +1,8 @@
-# 别问了还剩这么点 🤏 — AI Quota Widget
+# 双子续杯 🍵
 
 > 一眼看清 Claude Code + Codex 还能写多久 —— iPhone 桌面小组件，纯本地、零成本。
+>
+> 「双子」= Claude + Codex 两个 Agent，「续杯」= 额度喝完得等下一轮。组件标题：**别问了还剩这么点🤏**
 
 重度用 Claude Code / OpenAI Codex 的人都有「额度焦虑」：当前这个 5 小时窗口还能不能继续猛写代码？跑长任务不能打断去查、人不在电脑前也想知道。
 
