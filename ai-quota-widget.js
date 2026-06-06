@@ -31,16 +31,18 @@ function kcSet(key, obj) { Keychain.set(key, JSON.stringify(obj)); }
 // 期望剪贴板里是 export-tokens.sh 输出的 JSON：
 // { "claude": {accessToken, refreshToken, expiresAt}, "codex": {accessToken, refreshToken, accountId} }
 async function bootstrapIfNeeded() {
-  if (kcGet(KC_CLAUDE) && kcGet(KC_CODEX)) return true;
+  // 至少配置了一个平台就放行（支持只用 Claude 或只用 Codex）
+  if (kcGet(KC_CLAUDE)?.accessToken || kcGet(KC_CODEX)?.accessToken) return true;
   let raw = Pasteboard.paste();
   let parsed = null;
   try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
-  if (parsed && parsed.claude && parsed.codex) {
-    kcSet(KC_CLAUDE, parsed.claude);
-    kcSet(KC_CODEX, parsed.codex);
+  let imported = [];
+  if (parsed?.claude?.accessToken) { kcSet(KC_CLAUDE, parsed.claude); imported.push("Claude"); }
+  if (parsed?.codex?.accessToken) { kcSet(KC_CODEX, parsed.codex); imported.push("Codex"); }
+  if (imported.length > 0) {
     let a = new Alert();
     a.title = "导入成功";
-    a.message = "Claude 与 Codex 的 token 已存入 Keychain。现在可以添加桌面组件了。";
+    a.message = `已导入：${imported.join(" + ")}。现在可以添加桌面组件了。`;
     a.addAction("好");
     await a.present();
     return true;
@@ -96,6 +98,16 @@ async function refreshCodex(tok) {
 // ============ 拉取额度 ============
 // 返回统一结构：{ fiveHour:{remain, resetAt}, sevenDay:{remain, resetAt} }
 // remain 为剩余百分比(0-100)，resetAt 为毫秒时间戳
+// 包装：未配置返回 null（不显示该列），失败返回 {error:true}（回退缓存），成功返回数据
+async function getClaude() {
+  if (!kcGet(KC_CLAUDE)?.accessToken) return null;
+  try { return await fetchClaude(); } catch (e) { return { error: true }; }
+}
+async function getCodex() {
+  if (!kcGet(KC_CODEX)?.accessToken) return null;
+  try { return await fetchCodex(); } catch (e) { return { error: true }; }
+}
+
 async function fetchClaude() {
   let tok = kcGet(KC_CLAUDE);
   if (!tok) throw new Error("无 Claude token");
@@ -208,7 +220,7 @@ function barImage(remain, w, h) {
 }
 
 // ============ 渲染：单个 Agent 列 ============
-function renderColumn(stack, title, accent, data) {
+function renderColumn(stack, title, accent, data, barW) {
   let col = stack.addStack();
   col.layoutVertically();
   col.spacing = 4;
@@ -226,8 +238,8 @@ function renderColumn(stack, title, accent, data) {
     lb.font = Font.systemFont(11);
     lb.textColor = new Color("#ffffff", 0.8);
     lb.size = new Size(20, 0);
-    let img = line.addImage(barImage(d.remain, 70, 8));
-    img.imageSize = new Size(70, 8);
+    let img = line.addImage(barImage(d.remain, barW, 8));
+    img.imageSize = new Size(barW, 8);
     let pct = line.addText(`${Math.round(d.remain)}%`);
     pct.font = Font.semiboldSystemFont(12);
     pct.textColor = Color.white();
@@ -241,7 +253,8 @@ function renderColumn(stack, title, accent, data) {
 }
 
 // ============ 渲染：组件 ============
-function buildWidget(claude, codex, updatedAt, offline) {
+// platforms: [{title, accent, data}]，按数量自适应单列/双列
+function buildWidget(platforms, updatedAt, offline) {
   let w = new ListWidget();
   w.backgroundColor = new Color("#1c1c1e");
   w.setPadding(12, 14, 12, 14);
@@ -260,18 +273,25 @@ function buildWidget(claude, codex, updatedAt, offline) {
 
   w.addSpacer(8);
 
-  // 双列
   let body = w.addStack();
   body.layoutHorizontally();
   body.topAlignContent();
-  renderColumn(body, "Claude", new Color("#d97757"), claude);
-  body.addSpacer();
-  // 竖分隔
-  let divider = body.addStack();
-  divider.size = new Size(1, 60);
-  divider.backgroundColor = new Color("#ffffff", 0.12);
-  body.addSpacer();
-  renderColumn(body, "Codex", new Color("#10a37f"), codex);
+
+  if (platforms.length === 1) {
+    // 单列：居中、进度条更宽占满
+    body.addSpacer();
+    renderColumn(body, platforms[0].title, platforms[0].accent, platforms[0].data, 130);
+    body.addSpacer();
+  } else {
+    // 双列：中间竖分隔
+    renderColumn(body, platforms[0].title, platforms[0].accent, platforms[0].data, 70);
+    body.addSpacer();
+    let divider = body.addStack();
+    divider.size = new Size(1, 60);
+    divider.backgroundColor = new Color("#ffffff", 0.12);
+    body.addSpacer();
+    renderColumn(body, platforms[1].title, platforms[1].accent, platforms[1].data, 70);
+  }
 
   return w;
 }
@@ -281,26 +301,45 @@ async function main() {
   let ok = await bootstrapIfNeeded();
   if (!ok) { Script.complete(); return; }
 
-  let claude, codex, offline = false;
-  try {
-    [claude, codex] = await Promise.all([fetchClaude(), fetchCodex()]);
-    saveCache({ claude, codex, updatedAt: Date.now() });
-  } catch (e) {
-    // 拉取失败 → 回退缓存
-    let c = loadCache();
-    offline = true;
-    if (c) { claude = c.claude; codex = c.codex; }
-    else {
-      let w = new ListWidget();
-      w.backgroundColor = new Color("#1c1c1e");
-      let t = w.addText("拉取失败，且无缓存\n" + String(e));
-      t.font = Font.systemFont(11); t.textColor = Color.white();
-      Script.setWidget(w); Script.complete(); return;
-    }
+  // 各拉各的：null=未配置(不显示)，{error}=失败(回退缓存)，否则=成功
+  let [claudeRes, codexRes] = await Promise.all([getClaude(), getCodex()]);
+  let cache = loadCache() || {};
+  let offline = false;
+
+  // 解析：成功用新数据，失败回退该平台缓存并标记离线
+  const resolve = (res, cached) => {
+    if (res === null) return null;
+    if (res.error) { offline = true; return cached || null; }
+    return res;
+  };
+  let claude = resolve(claudeRes, cache.claude);
+  let codex = resolve(codexRes, cache.codex);
+
+  // 写缓存：成功的平台更新，失败的保留旧值
+  let claudeOk = claudeRes && !claudeRes.error;
+  let codexOk = codexRes && !codexRes.error;
+  let newCache = {
+    claude: claudeOk ? claudeRes : cache.claude,
+    codex: codexOk ? codexRes : cache.codex,
+    updatedAt: (claudeOk || codexOk) ? Date.now() : (cache.updatedAt || Date.now()),
+  };
+  saveCache(newCache);
+
+  // 收集可显示的平台
+  let platforms = [];
+  if (claude) platforms.push({ title: "Claude", accent: new Color("#d97757"), data: claude });
+  if (codex) platforms.push({ title: "Codex", accent: new Color("#10a37f"), data: codex });
+
+  if (platforms.length === 0) {
+    let w = new ListWidget();
+    w.backgroundColor = new Color("#1c1c1e");
+    let t = w.addText("未配置 token 或暂无数据\n运行脚本导入 token");
+    t.font = Font.systemFont(11); t.textColor = Color.white();
+    Script.setWidget(w); Script.complete(); return;
   }
 
-  let updatedAt = (loadCache() || {}).updatedAt || Date.now();
-  let widget = buildWidget(claude, codex, updatedAt, offline);
+  let updatedAt = newCache.updatedAt;
+  let widget = buildWidget(platforms, updatedAt, offline);
   widget.refreshAfterDate = new Date(Date.now() + 12 * 60 * 1000); // 12 分钟后刷新
 
   if (config.runsInWidget) {
