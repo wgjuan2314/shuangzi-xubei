@@ -6,7 +6,7 @@
 
 **AI Quota Widget** 把两个平台的额度做成 iPhone 负一屏小组件，左滑即见，无需点开、无需刷新。
 
-![widget](docs/screenshot.png) <!-- 部署后补截图 -->
+![widget](docs/screenshot.png)
 
 ## 特性
 - **双平台统一视图**：Claude Code + Codex 的 5 小时 / 本周 剩余额度 + 重置倒计时
