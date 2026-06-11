@@ -128,6 +128,9 @@ async function fetchClaude() {
   };
   let { resp, status } = await call(tok);
   if (status === 401) { tok = await refreshClaude(tok); ({ resp, status } = await call(tok)); }
+  // 没有 five_hour 字段说明拿到的是错误体(401/限流等),抛错让上层回退缓存并标「离线」,
+  // 不能 100-undefined 伪装成「还剩100%」
+  if (!resp || !resp.five_hour) throw new Error("Claude 响应异常 status=" + status);
   return {
     fiveHour: { remain: 100 - (resp.five_hour?.utilization ?? 0), resetAt: Date.parse(resp.five_hour?.resets_at) },
     sevenDay: { remain: 100 - (resp.seven_day?.utilization ?? 0), resetAt: Date.parse(resp.seven_day?.resets_at) },
@@ -149,6 +152,8 @@ async function fetchCodex() {
   };
   let { resp, status } = await call(tok);
   if (status === 401) { tok = await refreshCodex(tok); ({ resp, status } = await call(tok)); }
+  // 同 Claude:没有 rate_limit 字段说明是错误体,抛错回退缓存,不伪装成满额
+  if (!resp || !resp.rate_limit) throw new Error("Codex 响应异常 status=" + status);
   let rl = resp.rate_limit || {};
   return {
     fiveHour: { remain: 100 - (rl.primary_window?.used_percent ?? 0), resetAt: (rl.primary_window?.reset_at ?? 0) * 1000 },
